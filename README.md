@@ -48,7 +48,7 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/var/lib/linksserver
-ExecStart=/usr/local/bin/linksserver --port 8080
+ExecStart=/usr/local/bin/linksserver
 Restart=always
 RestartSec=5
 Environment="PORT=8080"
@@ -114,4 +114,4 @@ sudo systemctl restart linksserver
 sudo systemctl disable linksserver
 ```
 
-**Note:** The service is configured to run on port 8080 by default (instead of port 80) to avoid requiring root privileges. You can change the port by modifying the `--port` flag or `PORT` environment variable in the service file, then run `sudo systemctl daemon-reload` and `sudo systemctl restart linksserver`.
+**Note:** The service is configured to run on port 8080 by default (instead of port 80) to avoid requiring root privileges. You can change the port by modifying the `PORT` environment variable in the service file, then run `sudo systemctl daemon-reload` and `sudo systemctl restart linksserver`.
