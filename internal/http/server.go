@@ -3,6 +3,9 @@ package http
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,10 +41,14 @@ func New(port int, dber Dber) *Server {
 }
 
 func (s *Server) Serve() {
-	defer s.dber.Close()
-	addr := fmt.Sprintf(
-		":%d", s.port,
-	)
-	fmt.Printf("listening on '%s'\n", addr)
-	http.ListenAndServe(addr, s.r)
+	go func() {
+		addr := fmt.Sprintf(":%d", s.port)
+		fmt.Printf("listening on '%s'\n", addr)
+		http.ListenAndServe(addr, s.r)
+	}()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	s.dber.Close()
 }
