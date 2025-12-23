@@ -30,8 +30,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=$HOME
+User=$(whoami)
+WorkingDirectory=$(pwd)
 ExecStart=$(go env GOPATH)/bin/linksserver
 Restart=always
 Environment="PORT=8080"
