@@ -41,6 +41,7 @@ func New(port int, dber Dber) *Server {
 }
 
 func (s *Server) Serve() {
+	s.AddIndexRoute()
 	go func() {
 		addr := fmt.Sprintf(":%d", s.port)
 		fmt.Printf("listening on '%s'\n", addr)
