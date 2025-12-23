@@ -34,7 +34,7 @@ User=$(whoami)
 WorkingDirectory=$(pwd)
 ExecStart=$(go env GOPATH)/bin/linksserver
 Restart=always
-Environment="PORT=8080"
+Environment="PORT=80"
 
 [Install]
 WantedBy=multi-user.target
