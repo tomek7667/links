@@ -38,6 +38,7 @@ func New(port int, dber Dber) *Server {
 }
 
 func (s *Server) Serve() {
+	defer s.dber.Close()
 	addr := fmt.Sprintf(
 		":%d", s.port,
 	)
