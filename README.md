@@ -5,7 +5,7 @@ small displayable links server
 ## Installation
 
 ```bash
-go install github.com/tomek7667/secrets/cmd/secretsserver@latest
+go install github.com/tomek7667/links/cmd/linksserver@latest
 ```
 
 Or build from source:
