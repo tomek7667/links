@@ -1,6 +1,8 @@
 package http
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -43,20 +45,49 @@ func New(port int, dber Dber) *Server {
 	return s
 }
 
-func (s *Server) Serve() {
+func (s *Server) Serve() error {
 	stopResources := make(chan struct{})
 	s.resources.Start(stopResources)
 	defer close(stopResources)
+	defer s.dber.Close()
 
 	s.AddIndexRoute()
+
+	addr := fmt.Sprintf(":%d", s.port)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: s.r,
+	}
+
+	errCh := make(chan error, 1)
 	go func() {
-		addr := fmt.Sprintf(":%d", s.port)
 		fmt.Printf("listening on '%s'\n", addr)
-		http.ListenAndServe(addr, s.r)
+		err := srv.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			errCh <- nil
+			return
+		}
+		errCh <- err
 	}()
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
-	s.dber.Close()
+	defer signal.Stop(c)
+
+	select {
+	case sig := <-c:
+		fmt.Printf("received signal '%s', shutting down\n", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+		return <-errCh
+	case err := <-errCh:
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, syscall.EACCES) && s.port < 1024 {
+			return fmt.Errorf("failed to listen on %s: %w (use --port 8080 or run with CAP_NET_BIND_SERVICE)", addr, err)
+		}
+		return err
+	}
 }

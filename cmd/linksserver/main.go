@@ -40,8 +40,7 @@ func main() {
 			}
 			port := c.Int("port")
 			server := http.New(port, db)
-			server.Serve()
-			return nil
+			return server.Serve()
 		},
 		BashComplete: cli.ShowCompletions,
 	}
