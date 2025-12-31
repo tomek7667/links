@@ -95,10 +95,43 @@ func runUpdate(ctx context.Context) error {
 		return fmt.Errorf("go not found in PATH; cannot self-update (try: `go install %s`)", goInstallTarget)
 	}
 
+	// Use fresh caches for each update attempt so we don't have to wait for stale
+	// module metadata to expire.
+	tmpGoCacheDir := filepath.Join(tmpDir, "gocache")
+	tmpGoModCacheDir := filepath.Join(tmpDir, "gomodcache")
+	if err := os.MkdirAll(tmpGoCacheDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create temp go cache dir: %w", err)
+	}
+	if err := os.MkdirAll(tmpGoModCacheDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create temp go module cache dir: %w", err)
+	}
+	goEnv := append(os.Environ(),
+		"GOBIN="+tmpDir,
+		"GOCACHE="+tmpGoCacheDir,
+		"GOMODCACHE="+tmpGoModCacheDir,
+	)
+
+	fmt.Println("refreshing Go caches...")
+	cleanCmd := exec.CommandContext(ctx, goExe, "clean", "-cache", "-modcache")
+	cleanCmd.Env = goEnv
+	if out, err := cleanCmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return fmt.Errorf("failed to run `go clean -cache -modcache`: %w", err)
+		}
+		return fmt.Errorf("failed to run `go clean -cache -modcache`: %w\n\n%s", err, msg)
+	}
+
 	fmt.Printf("fetching latest via `go install %s`...\n", goInstallTarget)
 	cmd := exec.CommandContext(ctx, goExe, "install", goInstallTarget)
-	cmd.Env = append(os.Environ(), "GOBIN="+tmpDir)
+	cmd.Env = append(goEnv, "GOPROXY=direct")
 	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Println("direct fetch failed; retrying with default GOPROXY...")
+		cmd = exec.CommandContext(ctx, goExe, "install", goInstallTarget)
+		cmd.Env = goEnv
+		out, err = cmd.CombinedOutput()
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {

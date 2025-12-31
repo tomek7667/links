@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runs-on: windows-latest
+            goos: windows
+            goarch: amd64
+          - runs-on: macos-latest
+            goos: darwin
+            goarch: amd64
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          ext=""
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            ext=".exe"
+          fi
+
+          for dir in cmd/*; do
+            if [[ -d "$dir" ]]; then
+              name="$(basename "$dir")"
+              out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${ext}"
+              echo "building $dir -> $out"
+              GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" go build -o "$out" "$dir"
+            fi
+          done
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
