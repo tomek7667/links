@@ -458,16 +458,6 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return nil
 }
 
-func replaceFile(srcPath, dstPath string) error {
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("cannot replace running executable on Windows; update will finish in background")
-	}
-	if err := os.Remove(dstPath); err != nil {
-		return err
-	}
-	return os.Rename(srcPath, dstPath)
-}
-
 func writeJSONFileAtomic(path string, v any, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
