@@ -212,12 +212,14 @@ const indexHTML = `<!DOCTYPE html>
                     <div class="stat-sub" id="cpuMeta">-</div>
                     <div class="stat-sub">Temp: <span id="cpuTemp">-</span></div>
                     <div class="stat-sub">Processes: <span id="processCount">-</span></div>
+                    <div class="stat-sub">Top CPU: <span id="cpuTopProc">-</span></div>
                 </div>
                 <div class="stat">
                     <div class="stat-label">RAM</div>
                     <div class="stat-value"><span id="memUsed">-</span> / <span id="memTotal">-</span></div>
-                    <div class="stat-sub"><span id="memPercent">-</span>% used</div>
+                    <div class="stat-sub" id="memPercentWrap"><span id="memPercent">-</span>% used</div>
                     <div class="stat-sub" id="memMeta">-</div>
+                    <div class="stat-sub">Top RAM: <span id="memTopProc">-</span></div>
                     <div class="stat-sub" id="swapMeta">Swap/pagefile: -</div>
                 </div>
                 <div class="stat">
@@ -232,7 +234,7 @@ const indexHTML = `<!DOCTYPE html>
                 <table class="disk-table">
                     <thead>
                         <tr>
-                            <th>GPU</th>
+                            <th>Model</th>
                             <th>Util</th>
                             <th>VRAM</th>
                             <th>Temp</th>
@@ -343,6 +345,14 @@ const indexHTML = `<!DOCTYPE html>
             return gb.toFixed(1) + ' GB';
         };
 
+        const formatMB = (bytes) => {
+            if (bytes === null || bytes === undefined) return '-';
+            const mb = Number(bytes) / 1024 / 1024;
+            if (!Number.isFinite(mb)) return '-';
+            if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+            return mb.toFixed(0) + ' MB';
+        };
+
         const formatPercent = (p) => {
             const n = Number(p);
             if (!Number.isFinite(n)) return '-';
@@ -379,6 +389,11 @@ const indexHTML = `<!DOCTYPE html>
         };
 
         const joinParts = (parts) => parts.filter(p => p && String(p).trim() !== '').join(' | ');
+        const cleanMetaValue = (v) => {
+            const s = String(v || '').trim();
+            if (s === '' || s.toLowerCase() === 'unknown') return '';
+            return s;
+        };
 
         const formatGHz = (mhz) => {
             const n = Number(mhz);
@@ -458,7 +473,7 @@ const indexHTML = `<!DOCTYPE html>
                 if (sized.length > 0) {
                     const firstSize = Number(sized[0].sizeBytes);
                     const sameSize = sized.every(m => Number(m.sizeBytes) === firstSize);
-                    const vendor = sized.map(m => m.vendor).find(v => v && String(v).trim() !== '');
+                    const vendor = sized.map(m => cleanMetaValue(m.vendor)).find(v => v && String(v).trim() !== '');
                     if (sameSize) {
                         const sizeStr = formatGB(firstSize);
                         parts.push(String(sized.length) + 'x' + sizeStr + (vendor ? ' (' + vendor + ')' : ''));
@@ -476,7 +491,43 @@ const indexHTML = `<!DOCTYPE html>
             if (!memory || Number(memory.swapTotalBytes) <= 0) return 'Swap/pagefile: -';
             const pct = Number(memory.swapUsedPercent);
             const pctStr = Number.isFinite(pct) && pct > 0 ? (' (' + formatPercent(pct) + '%)') : '';
-            return 'Swap/pagefile: ' + formatGB(memory.swapUsedBytes) + ' / ' + formatGB(memory.swapTotalBytes) + pctStr;
+
+            let devices = '';
+            if (Array.isArray(memory.swapDevices) && memory.swapDevices.length > 0) {
+                const labels = memory.swapDevices.slice(0, 2).map(d => {
+                    const name = cleanMetaValue(d && d.name);
+                    const type = cleanMetaValue(d && d.type);
+                    return joinParts([name, type]);
+                }).filter(Boolean);
+                if (labels.length > 0) {
+                    devices = ' [' + labels.join(', ') + (memory.swapDevices.length > 2 ? ', ...' : '') + ']';
+                }
+            }
+
+            return 'Swap/pagefile: ' + formatGB(memory.swapUsedBytes) + ' / ' + formatGB(memory.swapTotalBytes) + pctStr + devices;
+        };
+
+        const formatProcessLine = (proc, kind) => {
+            if (!proc || !proc.name) return '-';
+            const pid = Number(proc.pid);
+            const name = String(proc.name);
+            const shortName = name.length > 18 ? name.slice(0, 15) + '...' : name;
+            const header = shortName + (Number.isInteger(pid) && pid > 0 ? ' (' + pid + ')' : '');
+            const usage = [];
+
+            if (kind === 'cpu' && Number.isFinite(Number(proc.cpuPercent))) {
+                usage.push(formatPercent(proc.cpuPercent) + '% CPU');
+            }
+            if (kind === 'mem') {
+                if (Number.isFinite(Number(proc.memoryBytes))) {
+                    usage.push(formatMB(proc.memoryBytes));
+                } else if (Number.isFinite(Number(proc.memoryPercent)) && proc.memoryPercent > 0) {
+                    usage.push(formatPercent(proc.memoryPercent) + '%');
+                }
+            }
+            const limited = usage.slice(0, 2);
+            if (limited.length === 0) return header;
+            return header + ': ' + limited.join(', ');
         };
 
         const renderDisks = (disks) => {
@@ -488,10 +539,10 @@ const indexHTML = `<!DOCTYPE html>
             }
             body.innerHTML = disks.map(d => {
                 const mount = d && d.mountpoint ? d.mountpoint : '';
-                const device = d && d.device ? d.device : '';
-                const filesystem = d && d.filesystem ? d.filesystem : '';
-                const driveType = d && d.driveType ? d.driveType : '';
-                const model = d && d.model ? d.model : '';
+                const device = cleanMetaValue(d && d.device);
+                const filesystem = cleanMetaValue(d && d.filesystem);
+                const driveType = cleanMetaValue(d && d.driveType);
+                const model = cleanMetaValue(d && d.model);
                 const used = d ? d.usedBytes : null;
                 const total = d ? d.totalBytes : null;
                 const pct = d ? d.usedPercent : null;
@@ -1049,13 +1100,15 @@ const indexHTML = `<!DOCTYPE html>
                 setLevel(document.getElementById('cpuPercentWrap'), levelForPercent(cpu ? cpu.percent : null, 60, 90));
                 setLevel(document.getElementById('cpuTemp'), levelForTemp(cpu ? cpu.temperatureC : null, 80, 90));
                 setText('processCount', data && Number.isFinite(Number(data.processes)) ? String(Number(data.processes)) : '-');
+                setText('cpuTopProc', formatProcessLine(data ? data.topCpu : null, 'cpu'));
 
                 setText('memUsed', formatGB(memory ? memory.usedBytes : null));
                 setText('memTotal', formatGB(memory ? memory.totalBytes : null));
                 setText('memPercent', formatPercent(memory ? memory.usedPercent : null));
                 setText('memMeta', buildMemMeta(memory));
                 setText('swapMeta', buildSwapMeta(memory));
-                setLevel(document.getElementById('memPercent'), levelForPercent(memory ? memory.usedPercent : null, 60, 90));
+                setText('memTopProc', formatProcessLine(data ? data.topMemory : null, 'mem'));
+                setLevel(document.getElementById('memPercentWrap'), levelForPercent(memory ? memory.usedPercent : null, 60, 90));
                 setText('updatedAt', formatTime(data ? data.updatedAt : null));
 
                 renderDisks(data ? data.disks : null);

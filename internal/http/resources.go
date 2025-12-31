@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"math"
@@ -30,6 +31,8 @@ type ResourcesSnapshot struct {
 	Disks     []DiskStats    `json:"disks"`
 	GPUs      []GPUStats     `json:"gpus,omitempty"`
 	Processes int            `json:"processes"`
+	TopCPU    *ProcessSample `json:"topCpu,omitempty"`
+	TopMemory *ProcessSample `json:"topMemory,omitempty"`
 	History   []HistoryPoint `json:"history,omitempty"`
 	Errors    SnapshotError  `json:"errors"`
 }
@@ -65,12 +68,20 @@ type MemoryStats struct {
 	SwapUsedBytes   uint64             `json:"swapUsedBytes"`
 	SwapUsedPercent float64            `json:"swapUsedPercent"`
 	Modules         []MemoryModuleInfo `json:"modules,omitempty"`
+	SwapDevices     []SwapDeviceStats  `json:"swapDevices,omitempty"`
 }
 
 type MemoryModuleInfo struct {
 	Label     string `json:"label"`
 	Vendor    string `json:"vendor"`
 	SizeBytes uint64 `json:"sizeBytes"`
+}
+
+type SwapDeviceStats struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	SizeBytes uint64 `json:"sizeBytes"`
+	UsedBytes uint64 `json:"usedBytes"`
 }
 
 type DiskStats struct {
@@ -93,6 +104,14 @@ type GPUStats struct {
 	MemoryTotalBytes   *uint64  `json:"memoryTotalBytes,omitempty"`
 	MemoryUsedBytes    *uint64  `json:"memoryUsedBytes,omitempty"`
 	TemperatureC       *float64 `json:"temperatureC,omitempty"`
+}
+
+type ProcessSample struct {
+	PID           int     `json:"pid"`
+	Name          string  `json:"name"`
+	CPUPercent    float64 `json:"cpuPercent,omitempty"`
+	MemoryBytes   uint64  `json:"memoryBytes,omitempty"`
+	MemoryPercent float64 `json:"memoryPercent,omitempty"`
 }
 
 type HistoryPoint struct {
@@ -145,6 +164,11 @@ type ResourceMonitor struct {
 	gpusCache     []GPUStats
 	gpusUpdatedAt time.Time
 	gpusErr       error
+
+	prevProcessTimes   map[int32]float64
+	lastProcessSample  time.Time
+	boardModel         string
+	boardModelResolved bool
 
 	history []HistoryPoint
 }
@@ -280,6 +304,11 @@ func (m *ResourceMonitor) update() {
 		errs.CPU = strings.TrimSpace(strings.Join([]string{errs.CPU, fmt.Sprintf("processes: %v", procErr)}, "; "))
 	}
 
+	topCPU, topMem, topProcErr := m.sampleTopProcesses(now, cpuStats.LogicalCores, memStats.TotalBytes)
+	if topProcErr != nil {
+		errs.CPU = strings.TrimSpace(strings.Join([]string{errs.CPU, fmt.Sprintf("top processes: %v", topProcErr)}, "; "))
+	}
+
 	snap := ResourcesSnapshot{
 		HostIP:    m.hostIP,
 		UpdatedAt: now.UnixMilli(),
@@ -288,6 +317,8 @@ func (m *ResourceMonitor) update() {
 		Disks:     m.disksCache,
 		GPUs:      m.gpusCache,
 		Processes: procCount,
+		TopCPU:    topCPU,
+		TopMemory: topMem,
 		Errors:    errs,
 	}
 
@@ -552,6 +583,90 @@ func sampleProcessCount() (int, error) {
 	return len(pids), nil
 }
 
+func (m *ResourceMonitor) sampleTopProcesses(now time.Time, logicalCores int, memTotal uint64) (*ProcessSample, *ProcessSample, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	procs, err := process.ProcessesWithContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	elapsedSec := now.Sub(m.lastProcessSample).Seconds()
+	newPrev := make(map[int32]float64, len(procs))
+
+	cores := logicalCores
+	if cores <= 0 {
+		cores = runtime.NumCPU()
+	}
+	if cores <= 0 {
+		cores = 1
+	}
+
+	var topCPU *ProcessSample
+	var topMem *ProcessSample
+
+	for _, p := range procs {
+		if p == nil {
+			continue
+		}
+		pid := p.Pid
+		name, _ := p.NameWithContext(ctx)
+
+		if times, err := p.TimesWithContext(ctx); err == nil {
+			totalCPU := times.Total()
+			newPrev[pid] = totalCPU
+			if elapsedSec > 0 {
+				if prev, ok := m.prevProcessTimes[pid]; ok {
+					delta := totalCPU - prev
+					if delta < 0 {
+						delta = 0
+					}
+					cpuPct := (delta / elapsedSec) * 100 / float64(cores)
+					if cpuPct < 0 {
+						cpuPct = 0
+					}
+					if cpuPct > 100 {
+						cpuPct = math.Min(cpuPct, 100)
+					}
+					if topCPU == nil || cpuPct > topCPU.CPUPercent {
+						topCPU = &ProcessSample{
+							PID:        int(pid),
+							Name:       name,
+							CPUPercent: cpuPct,
+						}
+					}
+				}
+			}
+		}
+
+		if memInfo, err := p.MemoryInfoWithContext(ctx); err == nil && memInfo != nil {
+			memBytes := memInfo.RSS
+			memPct := 0.0
+			if memTotal > 0 {
+				memPct = float64(memBytes) / float64(memTotal) * 100
+			}
+			if topMem == nil || memBytes > topMem.MemoryBytes {
+				topMem = &ProcessSample{
+					PID:           int(pid),
+					Name:          name,
+					MemoryBytes:   memBytes,
+					MemoryPercent: memPct,
+				}
+			}
+			if topCPU != nil && topCPU.PID == int(pid) && topCPU.Name == name {
+				topCPU.MemoryBytes = memBytes
+				topCPU.MemoryPercent = memPct
+			}
+		}
+	}
+
+	m.prevProcessTimes = newPrev
+	m.lastProcessSample = now
+
+	return topCPU, topMem, nil
+}
+
 func linuxCPUFreqSummary() (cpuFreqSummary, error) {
 	const cpuRoot = "/sys/devices/system/cpu"
 
@@ -713,6 +828,21 @@ func (m *ResourceMonitor) sampleMemory() (MemoryStats, error) {
 
 	if modules, err := m.getMemoryModules(); err == nil && len(modules) > 0 {
 		stats.Modules = modules
+	} else if len(stats.Modules) == 0 {
+		model := m.boardModelName()
+		if strings.Contains(strings.ToLower(model), "raspberry pi") {
+			stats.Modules = []MemoryModuleInfo{
+				{
+					Label:     "SoC",
+					Vendor:    model,
+					SizeBytes: vm.Total,
+				},
+			}
+		}
+	}
+
+	if swapDevices, err := getSwapDevices(); err == nil && len(swapDevices) > 0 {
+		stats.SwapDevices = swapDevices
 	}
 
 	return stats, nil
@@ -747,6 +877,73 @@ func (m *ResourceMonitor) getMemoryModules() ([]MemoryModuleInfo, error) {
 	m.memoryModules = modules
 	m.memoryModulesLoaded = true
 	return modules, nil
+}
+
+func (m *ResourceMonitor) boardModelName() string {
+	if m.boardModelResolved {
+		return m.boardModel
+	}
+	m.boardModelResolved = true
+
+	if runtime.GOOS == "linux" {
+		paths := []string{
+			"/proc/device-tree/model",
+			"/sys/firmware/devicetree/base/model",
+		}
+		for _, p := range paths {
+			if b, err := os.ReadFile(p); err == nil {
+				model := strings.TrimRight(strings.TrimSpace(string(b)), "\x00")
+				if model != "" {
+					m.boardModel = model
+					break
+				}
+			}
+		}
+	}
+
+	return m.boardModel
+}
+
+func getSwapDevices() ([]SwapDeviceStats, error) {
+	if runtime.GOOS != "linux" {
+		return nil, nil
+	}
+
+	f, err := os.Open("/proc/swaps")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var swaps []SwapDeviceStats
+	scanner := bufio.NewScanner(f)
+	first := true
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if first {
+			first = false
+			continue
+		}
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		sizeKB, _ := strconv.ParseUint(fields[2], 10, 64)
+		usedKB, _ := strconv.ParseUint(fields[3], 10, 64)
+		swaps = append(swaps, SwapDeviceStats{
+			Name:      fields[0],
+			Type:      fields[1],
+			SizeBytes: sizeKB * 1024,
+			UsedBytes: usedKB * 1024,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return swaps, err
+	}
+	return swaps, nil
 }
 
 const (
@@ -793,7 +990,7 @@ func (m *ResourceMonitor) getDiskMeta() (map[string]diskMeta, error) {
 }
 
 func (m *ResourceMonitor) sampleDisks() ([]DiskStats, error) {
-	parts, err := disk.Partitions(false)
+	parts, err := disk.Partitions(true)
 	if err != nil {
 		return nil, err
 	}
@@ -824,6 +1021,8 @@ func (m *ResourceMonitor) sampleDisks() ([]DiskStats, error) {
 		"mqueue":     {},
 		"proc":       {},
 		"pstore":     {},
+		"overlay":    {},
+		"squashfs":   {},
 		"securityfs": {},
 		"sysfs":      {},
 		"tmpfs":      {},
@@ -842,7 +1041,20 @@ func (m *ResourceMonitor) sampleDisks() ([]DiskStats, error) {
 			if _, ignore := ignoredFSTypes[p.Fstype]; ignore {
 				continue
 			}
-			if p.Mountpoint == "/mnt" || strings.HasPrefix(p.Mountpoint, "/mnt/") {
+			mp := strings.TrimSpace(p.Mountpoint)
+			if mp == "" {
+				continue
+			}
+			if mp == "/mnt" || strings.HasPrefix(mp, "/mnt/") || strings.HasPrefix(mp, "/media/") || strings.HasPrefix(mp, "/run/media/") {
+				selected[mp] = struct{}{}
+				continue
+			}
+			dev := strings.TrimSpace(p.Device)
+			if strings.HasPrefix(dev, "/dev/") && !strings.Contains(dev, "loop") {
+				selected[mp] = struct{}{}
+				continue
+			}
+			if strings.HasPrefix(mp, "/") && !strings.HasPrefix(mp, "/sys/") && !strings.HasPrefix(mp, "/proc/") && !strings.HasPrefix(mp, "/dev/") {
 				selected[p.Mountpoint] = struct{}{}
 			}
 		}
@@ -921,6 +1133,9 @@ func diskTypeLabel(driveType, controller string) string {
 	}
 	driveType = strings.TrimSpace(driveType)
 	if driveType == "" || strings.EqualFold(driveType, "unknown") {
+		if controller != "" && !strings.EqualFold(controller, "unknown") {
+			return strings.ToUpper(controller)
+		}
 		return ""
 	}
 	return strings.ToUpper(driveType)
@@ -992,7 +1207,7 @@ func (m *ResourceMonitor) sampleGPUs() ([]GPUStats, error) {
 }
 
 func nvidiaSMIMetrics() ([]nvidiaSMIGPU, error) {
-	path, err := exec.LookPath("nvidia-smi")
+	path, err := findNvidiaSMI()
 	if err != nil {
 		return nil, err
 	}
@@ -1094,6 +1309,28 @@ func mergeNvidiaSMIMetrics(gpus []GPUStats, metrics []nvidiaSMIGPU) []GPUStats {
 	}
 
 	return gpus
+}
+
+func findNvidiaSMI() (string, error) {
+	if p, err := exec.LookPath("nvidia-smi"); err == nil {
+		return p, nil
+	}
+
+	if runtime.GOOS == "windows" {
+		candidates := []string{
+			os.ExpandEnv(`%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe`),
+			os.ExpandEnv(`%ProgramFiles(x86)%\NVIDIA Corporation\NVSMI\nvidia-smi.exe`),
+		}
+		for _, c := range candidates {
+			if c == "" {
+				continue
+			}
+			if _, err := os.Stat(c); err == nil {
+				return c, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("nvidia-smi not found")
 }
 
 func preferredHostIP() (string, error) {
