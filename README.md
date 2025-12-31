@@ -56,4 +56,8 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now linksserver
 sudo systemctl status linksserver
+
+# Logs
+sudo journalctl -u linksserver -f
+sudo journalctl -u linksserver -n 100 --no-pager
 ```
