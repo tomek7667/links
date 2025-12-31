@@ -53,7 +53,7 @@ jobs:
               name="$(basename "$dir")"
               out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${ext}"
               echo "building $dir -> $out"
-              GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" go build -o "$out" "$dir"
+              GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" go build -o "$out" "./$dir"
             fi
           done
 
