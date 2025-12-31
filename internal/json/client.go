@@ -43,7 +43,7 @@ func (c *Client) dbExists() bool {
 }
 
 func (c *Client) writeDb() error {
-	err := os.WriteFile(c.Path, []byte(`{"links":[]}`), 0644)
+	err := os.WriteFile(c.Path, []byte(`{"links":[]}`), 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to create default db: %w", err)
 	}
