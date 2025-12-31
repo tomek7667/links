@@ -24,15 +24,18 @@ type Server struct {
 	port int
 	dber Dber
 	r    *chi.Mux
+
+	resources *ResourceMonitor
 }
 
 func New(port int, dber Dber) *Server {
 	s := &Server{
-		r:    chi.NewRouter(),
-		port: port,
-		dber: dber,
+		r:         chi.NewRouter(),
+		port:      port,
+		dber:      dber,
+		resources: NewResourceMonitor(),
 	}
-	s.r.Use(middleware.Logger)
+	s.r.Use(newRequestLogger("/api/resources"))
 	s.r.Use(middleware.RequestID)
 	s.r.Use(middleware.RealIP)
 	s.r.Use(middleware.Recoverer)
@@ -41,6 +44,10 @@ func New(port int, dber Dber) *Server {
 }
 
 func (s *Server) Serve() {
+	stopResources := make(chan struct{})
+	s.resources.Start(stopResources)
+	defer close(stopResources)
+
 	s.AddIndexRoute()
 	go func() {
 		addr := fmt.Sprintf(":%d", s.port)
