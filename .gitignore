@@ -1,1 +1,4 @@
 links.db.json
+dist/
+linksserver
+linksserver.exe
