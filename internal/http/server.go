@@ -16,9 +16,17 @@ import (
 )
 
 type Dber interface {
-	SaveLink(link domain.Link)
-	GetLinks() []domain.Link
-	DeleteLink(url string)
+	Links() []domain.Link
+	CreateLink(link domain.Link, at int) (domain.Link, error)
+	UpdateLink(id string, link domain.Link) (domain.Link, error)
+	DeleteLink(id string) error
+	DeleteLinkByURL(url string) error
+	ReorderLinks(ids []string) error
+	ReplaceHost(from, to string) (int, error)
+	RenameGroup(from, to string) (int, error)
+	ImportLinks(links []domain.Link, replace bool) (added, skipped int, err error)
+	Settings() domain.Settings
+	SaveSettings(s domain.Settings) (domain.Settings, error)
 	Close()
 }
 
@@ -28,6 +36,7 @@ type Server struct {
 	r    *chi.Mux
 
 	resources *ResourceMonitor
+	checker   *linkChecker
 }
 
 func New(port int, dber Dber) *Server {
@@ -36,12 +45,15 @@ func New(port int, dber Dber) *Server {
 		port:      port,
 		dber:      dber,
 		resources: NewResourceMonitor(),
+		checker:   newLinkChecker(),
 	}
-	s.r.Use(newRequestLogger("/api/resources"))
+	s.r.Use(newRequestLogger("/api/resources", "/api/links/status"))
 	s.r.Use(middleware.RequestID)
 	s.r.Use(middleware.RealIP)
 	s.r.Use(middleware.Recoverer)
+	s.r.Use(middleware.GetHead)
 	s.r.Use(middleware.Timeout(60 * time.Second))
+	s.r.Use(middleware.Compress(5, "text/html", "text/css", "text/javascript", "application/javascript", "application/json", "image/svg+xml"))
 	return s
 }
 
@@ -51,7 +63,7 @@ func (s *Server) Serve() error {
 	defer close(stopResources)
 	defer s.dber.Close()
 
-	s.AddIndexRoute()
+	s.addRoutes()
 
 	addr := fmt.Sprintf(":%d", s.port)
 	srv := &http.Server{
@@ -90,4 +102,13 @@ func (s *Server) Serve() error {
 		}
 		return err
 	}
+}
+
+// effectiveHostIP is the IP substituted for {ip}: the settings override, or
+// the auto-detected address.
+func (s *Server) effectiveHostIP() string {
+	if o := s.dber.Settings().HostIP; o != "" {
+		return o
+	}
+	return s.resources.DetectedHostIP()
 }

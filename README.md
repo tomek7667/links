@@ -1,6 +1,19 @@
 # links
 
-small displayable links server
+small displayable links server — a single self-contained binary (UI embedded, no build step, works offline on your LAN).
+
+## Features
+
+- **Links dashboard** — tiles with favicons, emoji or custom icons, groups (collapsible, renameable), descriptions, drag & drop reordering (drop onto another group to move a link there).
+- **Edit everything** — title, URL, group, description, icon. The editor splits the URL into separate **Host / IP** and **Port** fields, so changing just the IP of a link is one field.
+- **`{ip}` placeholder** — write `http://{ip}:8096` and the link always points at this server's current IP. `{host}` uses the hostname you opened the dashboard with (e.g. `pi.local`).
+- **Server IP** — auto-detected (container bridges like `docker0`/`br-*` are ignored), or pick another interface / type a custom IP in Settings. Click the IP in the header to copy it.
+- **Change IP in links** — Settings lists every host/IP your links use; replace one to update all of its links at once (port and path are kept), or convert a literal IP to `{ip}`.
+- **Status checks** — the server pings each link every 30 s and shows an online/offline dot with HTTP status and latency.
+- **Search** (`/` or `Ctrl+K`, `Enter` opens the first match), `N` adds a link, delete with **undo**.
+- **System monitor** — CPU (model, cores, clocks, temperature, load, top process), memory & swap, network throughput, GPUs, disks, uptime; 30-minute history chart with 1m/5m/15m/30m ranges, hover tooltip, click-to-pin, toggleable series and CSV export.
+- **Backup** — export links + settings as JSON, import (merge or replace; old `links.db.json` files work too).
+- Dark / light / auto theme, responsive down to phone width.
 
 ## Installation
 
@@ -61,3 +74,24 @@ sudo systemctl status linksserver
 sudo journalctl -u linksserver -f
 sudo journalctl -u linksserver -n 100 --no-pager
 ```
+
+## Data
+
+Links and settings live in `links.db.json` in the working directory. Files from older versions are migrated automatically (links get an `id`). Writes are atomic (temp file + rename).
+
+## HTTP API
+
+| Method | Path | Body / notes |
+| --- | --- | --- |
+| `GET` | `/api/links` | all links, in display order |
+| `POST` | `/api/links[?at=N]` | `{"title","url","group?","description?","icon?"}` — creates a link (optionally at position `N`) |
+| `PUT` | `/api/links/{id}` | same body — updates a link |
+| `DELETE` | `/api/links/{id}` | deletes a link (`DELETE /api/links` with `{"url": ...}` still works) |
+| `PUT` | `/api/links/order` | `{"ids": [...]}` |
+| `POST` | `/api/links/replace-host` | `{"from": "192.168.1.20", "to": "{ip}"}` — swaps the host in every matching link |
+| `GET` | `/api/links/status` | reachability of each link, keyed by id |
+| `POST` | `/api/groups/rename` | `{"from": "Media", "to": "Streaming"}` |
+| `GET` / `PUT` | `/api/settings` | `{"hostIp": "", "title": ""}` — empty `hostIp` means auto-detect |
+| `GET` | `/api/export` | JSON backup |
+| `POST` | `/api/import[?replace=1]` | a backup, a `links.db.json`, or a bare array of links |
+| `GET` | `/api/resources[?history=1]` | system snapshot (and history) |

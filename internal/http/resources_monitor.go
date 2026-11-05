@@ -39,8 +39,18 @@ type ResourceMonitor struct {
 	gpuMetaUpdatedAt time.Time
 
 	hostIP          string
+	hostIPs         []HostIPCandidate
 	hostIPUpdatedAt time.Time
 	hostIPErr       error
+
+	hostInfo          HostInfo
+	hostInfoUpdatedAt time.Time
+	hostInfoErr       error
+
+	netPrevRx   uint64
+	netPrevTx   uint64
+	netPrevAt   time.Time
+	haveNetPrev bool
 
 	cpuStatic          CPUStats
 	cpuStaticUpdatedAt time.Time
@@ -100,10 +110,24 @@ func (m *ResourceMonitor) Snapshot(includeHistory bool) ResourcesSnapshot {
 	snap := m.snapshot
 	snap.Disks = append([]DiskStats(nil), m.snapshot.Disks...)
 	snap.GPUs = append([]GPUStats(nil), m.snapshot.GPUs...)
+	snap.HostIPs = append([]HostIPCandidate(nil), m.snapshot.HostIPs...)
 	if includeHistory {
 		snap.History = cloneHistory(m.history)
 	}
 	return snap
+}
+
+// DetectedHostIP returns the auto-detected LAN IP from the latest sample.
+func (m *ResourceMonitor) DetectedHostIP() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.snapshot.DetectedHostIP
+}
+
+func (m *ResourceMonitor) Hostname() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.snapshot.Host.Hostname
 }
 
 func (m *ResourceMonitor) update() {
@@ -111,13 +135,16 @@ func (m *ResourceMonitor) update() {
 	var errs SnapshotError
 
 	if m.hostIP == "" || now.Sub(m.hostIPUpdatedAt) >= hostIPTTL {
-		m.hostIP, m.hostIPErr = preferredHostIP()
+		m.hostIP, m.hostIPs, m.hostIPErr = detectHostIPs()
 		m.hostIPUpdatedAt = now
 	}
 	if m.hostIPErr != nil {
 		errs.HostIP = m.hostIPErr.Error()
 	}
 
+	// CPU % and network rates are deltas, so the very first sample has no
+	// baseline and reads as 0. Keep it out of the history graph.
+	baselineReady := m.havePrevCPU
 	cpuPercent, cpuPercentErr := m.sampleCPUPercent()
 
 	if m.cpuStaticUpdatedAt.IsZero() || now.Sub(m.cpuStaticUpdatedAt) >= cpuStaticTTL {
@@ -202,22 +229,39 @@ func (m *ResourceMonitor) update() {
 		errs.CPU = strings.TrimSpace(strings.Join([]string{errs.CPU, fmt.Sprintf("top processes: %v", topProcErr)}, "; "))
 	}
 
+	hostInfo, hostErr := m.sampleHostInfo(now)
+	if hostErr != nil {
+		errs.Host = hostErr.Error()
+	}
+
+	netStats, netErr := m.sampleNetwork(now)
+	if netErr != nil {
+		errs.Network = netErr.Error()
+	}
+
 	snap := ResourcesSnapshot{
-		HostIP:    m.hostIP,
-		UpdatedAt: now.UnixMilli(),
-		CPU:       cpuStats,
-		Memory:    memStats,
-		Disks:     m.disksCache,
-		GPUs:      m.gpusCache,
-		Processes: procCount,
-		TopCPU:    topCPU,
-		TopMemory: topMem,
-		Errors:    errs,
+		HostIP:         m.hostIP,
+		DetectedHostIP: m.hostIP,
+		HostIPs:        m.hostIPs,
+		Host:           hostInfo,
+		UpdatedAt:      now.UnixMilli(),
+		CPU:            cpuStats,
+		Load:           sampleLoad(),
+		Memory:         memStats,
+		Network:        netStats,
+		Disks:          m.disksCache,
+		GPUs:           m.gpusCache,
+		Processes:      procCount,
+		TopCPU:         topCPU,
+		TopMemory:      topMem,
+		Errors:         errs,
 	}
 
 	m.mu.Lock()
 	m.snapshot = snap
-	m.appendHistoryLocked(snap)
+	if baselineReady {
+		m.appendHistoryLocked(snap)
+	}
 	m.mu.Unlock()
 }
 
@@ -226,6 +270,8 @@ func (m *ResourceMonitor) appendHistoryLocked(snap ResourcesSnapshot) {
 		Time: snap.UpdatedAt,
 		CPU:  snap.CPU.Percent,
 		Mem:  snap.Memory.UsedPercent,
+		Rx:   snap.Network.RxBytesPerSec,
+		Tx:   snap.Network.TxBytesPerSec,
 	}
 
 	for _, d := range snap.Disks {

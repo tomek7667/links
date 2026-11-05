@@ -1,25 +1,58 @@
 package http
 
 type ResourcesSnapshot struct {
-	HostIP    string         `json:"hostIp"`
-	UpdatedAt int64          `json:"updatedAt"`
-	CPU       CPUStats       `json:"cpu"`
-	Memory    MemoryStats    `json:"memory"`
-	Disks     []DiskStats    `json:"disks"`
-	GPUs      []GPUStats     `json:"gpus,omitempty"`
-	Processes int            `json:"processes"`
-	TopCPU    *ProcessSample `json:"topCpu,omitempty"`
-	TopMemory *ProcessSample `json:"topMemory,omitempty"`
-	History   []HistoryPoint `json:"history,omitempty"`
-	Errors    SnapshotError  `json:"errors"`
+	// HostIP is the IP the UI should show and substitute for {ip}: the settings
+	// override when set, otherwise DetectedHostIP.
+	HostIP         string            `json:"hostIp"`
+	DetectedHostIP string            `json:"detectedHostIp"`
+	HostIPOverride bool              `json:"hostIpOverride"`
+	HostIPs        []HostIPCandidate `json:"hostIps,omitempty"`
+	Host           HostInfo          `json:"host"`
+	UpdatedAt      int64             `json:"updatedAt"`
+	CPU            CPUStats          `json:"cpu"`
+	Load           *LoadStats        `json:"load,omitempty"`
+	Memory         MemoryStats       `json:"memory"`
+	Network        NetworkStats      `json:"network"`
+	Disks          []DiskStats       `json:"disks"`
+	GPUs           []GPUStats        `json:"gpus,omitempty"`
+	Processes      int               `json:"processes"`
+	TopCPU         *ProcessSample    `json:"topCpu,omitempty"`
+	TopMemory      *ProcessSample    `json:"topMemory,omitempty"`
+	History        []HistoryPoint    `json:"history,omitempty"`
+	Errors         SnapshotError     `json:"errors"`
+}
+
+type HostInfo struct {
+	Hostname  string `json:"hostname"`
+	OS        string `json:"os"`
+	Platform  string `json:"platform"`
+	Kernel    string `json:"kernel"`
+	Arch      string `json:"arch"`
+	BootTime  int64  `json:"bootTime"`
+	UptimeSec int64  `json:"uptimeSec"`
+}
+
+type LoadStats struct {
+	Load1  float64 `json:"load1"`
+	Load5  float64 `json:"load5"`
+	Load15 float64 `json:"load15"`
+}
+
+type NetworkStats struct {
+	RxBytesPerSec float64 `json:"rxBytesPerSec"`
+	TxBytesPerSec float64 `json:"txBytesPerSec"`
+	RxTotalBytes  uint64  `json:"rxTotalBytes"`
+	TxTotalBytes  uint64  `json:"txTotalBytes"`
 }
 
 type SnapshotError struct {
-	CPU    string `json:"cpu"`
-	Memory string `json:"memory"`
-	Disks  string `json:"disks"`
-	GPUs   string `json:"gpus"`
-	HostIP string `json:"hostIp"`
+	CPU     string `json:"cpu"`
+	Memory  string `json:"memory"`
+	Disks   string `json:"disks"`
+	GPUs    string `json:"gpus"`
+	HostIP  string `json:"hostIp"`
+	Host    string `json:"host"`
+	Network string `json:"network"`
 }
 
 type CPUStats struct {
@@ -95,6 +128,8 @@ type HistoryPoint struct {
 	Time  int64              `json:"time"`
 	CPU   float64            `json:"cpu"`
 	Mem   float64            `json:"mem"`
+	Rx    float64            `json:"rx"`
+	Tx    float64            `json:"tx"`
 	Disks map[string]float64 `json:"disks,omitempty"`
 }
 
