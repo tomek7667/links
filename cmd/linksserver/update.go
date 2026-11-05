@@ -110,6 +110,14 @@ func runUpdate(ctx context.Context) error {
 		"GOCACHE="+tmpGoCacheDir,
 		"GOMODCACHE="+tmpGoModCacheDir,
 	)
+	// linksserver is pure Go on Linux and Windows, so cgo is never needed there.
+	// Leaving it on breaks builds whenever the C compiler doesn't match Go's
+	// architecture — e.g. Raspberry Pi OS with a 32-bit userland and arm64 Go:
+	// "size of array '_check_for_64_bit_pointer_matching_GoInt' is negative".
+	// An explicit CGO_ENABLED in the environment still wins.
+	if _, set := os.LookupEnv("CGO_ENABLED"); !set && runtime.GOOS != "darwin" {
+		goEnv = append(goEnv, "CGO_ENABLED=0")
+	}
 
 	fmt.Println("refreshing Go caches...")
 	cleanCmd := exec.CommandContext(ctx, goExe, "clean", "-cache", "-modcache")

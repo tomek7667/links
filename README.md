@@ -21,6 +21,14 @@ small displayable links server — a single self-contained binary (UI embedded, 
 go install github.com/tomek7667/links/cmd/linksserver@latest
 ```
 
+On a Raspberry Pi (or whenever `go install` fails inside `runtime/cgo`, e.g. `size of array '_check_for_64_bit_pointer_matching_GoInt' is negative`), disable cgo — linksserver doesn't need it:
+
+```bash
+CGO_ENABLED=0 go install github.com/tomek7667/links/cmd/linksserver@latest
+```
+
+Prebuilt static binaries (including `linux_arm64` and `linux_armv7` for the Pi) are attached to every [release](https://github.com/tomek7667/links/releases).
+
 Or build from source:
 
 ```bash
@@ -39,7 +47,7 @@ linksserver update
 linksserver complete-update
 ```
 
-`update` drops a versioned binary next to the current one (e.g. `linksserver-v1.1.0.exe`), keeps a backup of the existing binary, and backs up `links.db.json` when present. Run the staged binary to test, then `complete-update` to promote it and delete the backups.
+`update` builds with `CGO_ENABLED=0` (unless you set it yourself), so it also works on a Raspberry Pi. It drops a versioned binary next to the current one (e.g. `linksserver-v1.1.0.exe`), keeps a backup of the existing binary, and backs up `links.db.json` when present. Run the staged binary to test, then `complete-update` to promote it and delete the backups.
 
 ## systemd Service (Raspberry Pi / Ubuntu)
 
@@ -95,3 +103,7 @@ Links and settings live in `links.db.json` in the working directory. Files from 
 | `GET` | `/api/export` | JSON backup |
 | `POST` | `/api/import[?replace=1]` | a backup, a `links.db.json`, or a bare array of links |
 | `GET` | `/api/resources[?history=1]` | system snapshot (and history) |
+
+## Releasing
+
+Push a `v1.x.y` tag; the release workflow builds and attaches binaries. Keep tags on `v1` — `go install …@latest` (and therefore `linksserver update`) ignores `v2+` tags unless the module path ends in `/v2`.

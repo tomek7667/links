@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: build (${{ matrix.goos }}-${{ matrix.goarch }})
+    name: build (${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }})
     runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
@@ -19,41 +19,63 @@ jobs:
           - runs-on: ubuntu-latest
             goos: linux
             goarch: amd64
+          # Raspberry Pi: arm64 for 64-bit Raspberry Pi OS, armv7 for 32-bit (Pi 2/3/4/5)
+          - runs-on: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - runs-on: ubuntu-latest
+            goos: linux
+            goarch: arm
+            goarm: "7"
           - runs-on: windows-latest
             goos: windows
             goarch: amd64
           - runs-on: macos-latest
             goos: darwin
             goarch: amd64
+          - runs-on: macos-latest
+            goos: darwin
+            goarch: arm64
 
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: setup go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: stable
           check-latest: true
 
       - name: build
         shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          # Pure Go: static binaries that don't depend on the runner's libc.
+          CGO_ENABLED: "0"
         run: |
           set -euo pipefail
 
           mkdir -p dist
 
           ext=""
-          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+          if [[ "$GOOS" == "windows" ]]; then
             ext=".exe"
+          fi
+          arch="$GOARCH"
+          if [[ -n "$GOARM" ]]; then
+            arch="${arch}v${GOARM}"
           fi
 
           for dir in cmd/*; do
             if [[ -d "$dir" ]]; then
               name="$(basename "$dir")"
-              out="dist/${name}_${{ matrix.goos }}_${{ matrix.goarch }}${ext}"
-              echo "building $dir -> $out"
-              GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" go build -o "$out" "$dir"
+              out="dist/${name}_${GOOS}_${arch}${ext}"
+              echo "building ./$dir -> $out"
+              # "./" is required: a bare "cmd/..." path is resolved inside GOROOT (the Go toolchain's own commands).
+              go build -trimpath -o "$out" "./$dir"
             fi
           done
 
